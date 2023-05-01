@@ -5,7 +5,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use sqlx_core::describe::Describe;
 use syn::spanned::Spanned;
-use syn::{Expr, ExprCast, ExprGroup, ExprType, Type};
+use syn::{Expr, ExprCast, ExprGroup, Type};
 
 /// Returns a tokenstream which typechecks the arguments passed to the macro
 /// and binds them to `DB::Arguments` with the ident `query_args`.
@@ -150,8 +150,7 @@ fn create_warning(name: Ident, ty: &Type, expr: &Expr) -> TokenStream {
 fn get_type_override(expr: &Expr) -> Option<(&Type, bool)> {
     match expr {
         Expr::Group(group) => get_type_override(&group.expr),
-        Expr::Cast(cast) => Some((&cast.ty, false)),
-        Expr::Type(ascription) => Some((&ascription.ty, true)),
+        Expr::Cast(cast) => Some(&cast.ty),
         _ => None,
     }
 }
@@ -167,8 +166,6 @@ fn strip_wildcard(expr: Expr) -> Expr {
             group_token,
             expr: Box::new(strip_wildcard(*expr)),
         }),
-        // type ascription syntax is experimental so we always strip it
-        Expr::Type(ExprType { expr, .. }) => *expr,
         // we want to retain casts if they semantically matter
         Expr::Cast(ExprCast {
             attrs,

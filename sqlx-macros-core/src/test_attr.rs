@@ -1,12 +1,20 @@
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
-use syn::LitStr;
+use syn::{parse::Parser, Meta};
 
+#[cfg(feature = "migrate")]
+use proc_macro2::Span;
+#[cfg(feature = "migrate")]
+use syn::{punctuated::Punctuated, Expr, ExprLit, Lit, LitStr, MetaNameValue, Token};
+
+#[cfg(feature = "migrate")]
 struct Args {
     fixtures: Vec<LitStr>,
+    #[cfg(feature = "migrate")]
     migrations: MigrationsOpt,
 }
 
+#[cfg(feature = "migrate")]
 enum MigrationsOpt {
     InferredPath,
     ExplicitPath(LitStr),
@@ -14,7 +22,12 @@ enum MigrationsOpt {
     Disabled,
 }
 
-pub fn expand(args: syn::AttributeArgs, input: syn::ItemFn) -> crate::Result<TokenStream> {
+type AttributeArgs = syn::punctuated::Punctuated<Meta, syn::Token![,]>;
+
+pub fn expand(args: TokenStream, input: syn::ItemFn) -> crate::Result<TokenStream> {
+    let parser = AttributeArgs::parse_terminated;
+    let args = parser.parse2(args)?;
+
     if input.sig.inputs.is_empty() {
         if !args.is_empty() {
             if cfg!(feature = "migrate") {
@@ -61,7 +74,7 @@ fn expand_simple(input: syn::ItemFn) -> TokenStream {
 }
 
 #[cfg(feature = "migrate")]
-fn expand_advanced(args: syn::AttributeArgs, input: syn::ItemFn) -> crate::Result<TokenStream> {
+fn expand_advanced(args: AttributeArgs, input: syn::ItemFn) -> crate::Result<TokenStream> {
     let ret = &input.sig.output;
     let name = &input.sig.ident;
     let inputs = &input.sig.inputs;
@@ -127,87 +140,72 @@ fn expand_advanced(args: syn::AttributeArgs, input: syn::ItemFn) -> crate::Resul
 }
 
 #[cfg(feature = "migrate")]
-fn parse_args(attr_args: syn::AttributeArgs) -> syn::Result<Args> {
+fn parse_args(args: AttributeArgs) -> Result<Args, syn::Error> {
     let mut fixtures = vec![];
     let mut migrations = MigrationsOpt::InferredPath;
 
-    for arg in attr_args {
+    for arg in args {
+        let path = arg.path().clone();
+
         match arg {
-            syn::NestedMeta::Meta(syn::Meta::List(list)) if list.path.is_ident("fixtures") => {
+            Meta::List(list) if path.is_ident("fixtures") => {
                 if !fixtures.is_empty() {
-                    return Err(syn::Error::new_spanned(list, "duplicate `fixtures` arg"));
+                    return Err(syn::Error::new_spanned(path, "duplicate `fixtures` arg"));
                 }
 
-                for nested in list.nested {
-                    match nested {
-                        syn::NestedMeta::Lit(syn::Lit::Str(litstr)) => fixtures.push(litstr),
-                        other => {
-                            return Err(syn::Error::new_spanned(other, "expected string literal"))
-                        }
-                    }
-                }
+                let parser = <Punctuated<LitStr, Token![,]>>::parse_terminated;
+                let list = parser.parse2(list.tokens)?;
+                fixtures.extend(list);
             }
-            syn::NestedMeta::Meta(syn::Meta::NameValue(namevalue))
-                if namevalue.path.is_ident("migrations") =>
-            {
+            Meta::NameValue(MetaNameValue { value, .. }) if path.is_ident("migrations") => {
                 if !matches!(migrations, MigrationsOpt::InferredPath) {
                     return Err(syn::Error::new_spanned(
-                        namevalue,
+                        path,
                         "cannot have more than one `migrations` or `migrator` arg",
                     ));
                 }
 
-                migrations = match namevalue.lit {
-                    syn::Lit::Bool(litbool) => {
-                        if !litbool.value {
-                            // migrations = false
-                            MigrationsOpt::Disabled
-                        } else {
-                            // migrations = true
-                            return Err(syn::Error::new_spanned(
-                                litbool,
-                                "`migrations = true` is redundant",
-                            ));
-                        }
-                    }
-                    // migrations = "<path>"
-                    syn::Lit::Str(litstr) => MigrationsOpt::ExplicitPath(litstr),
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            namevalue,
-                            "expected string or `false`",
-                        ))
-                    }
+                let Expr::Lit(ExprLit { lit, .. }) = value else {
+                    return Err(syn::Error::new_spanned(path, "expected string for `false`"))
                 };
-            }
-            syn::NestedMeta::Meta(syn::Meta::NameValue(namevalue))
-                if namevalue.path.is_ident("migrator") =>
-                {
-                    if !matches!(migrations, MigrationsOpt::InferredPath) {
+
+                migrations = match lit {
+                    // migrations = false
+                    Lit::Bool(b) if !b.value => MigrationsOpt::Disabled,
+                    // migrations = true
+                    Lit::Bool(b) => {
                         return Err(syn::Error::new_spanned(
-                            namevalue,
-                            "cannot have more than one `migrations` or `migrator` arg",
+                            b,
+                            "`migrations = true` is redundant",
                         ));
                     }
-
-                    migrations = match namevalue.lit {
-                        // migrator = "<path>"
-                        syn::Lit::Str(litstr) => MigrationsOpt::ExplicitMigrator(litstr.parse()?),
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                namevalue,
-                                "expected string",
-                            ))
-                        }
-                    };
-                }
-            other => {
-                return Err(syn::Error::new_spanned(
-                    other,
-                    "expected `fixtures(\"<filename>\", ...)` or `migrations = \"<path>\" | false` or `migrator = \"<rust path>\"`",
-                ))
+                    // migrations = "path"
+                    Lit::Str(s) => MigrationsOpt::ExplicitPath(s),
+                    lit => return Err(syn::Error::new_spanned(lit, "expected string or `false`")),
+                };
             }
-        }
+            // migrator = "path"
+            Meta::NameValue(MetaNameValue { value, .. }) if path.is_ident("migrator") => {
+                if !matches!(migrations, MigrationsOpt::InferredPath) {
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "cannot have more than one `migrations` or `migrator` arg",
+                    ));
+                }
+
+                let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value else {
+                    return Err(syn::Error::new_spanned(path, "expected string"))
+                };
+
+                migrations = MigrationsOpt::ExplicitMigrator(lit.parse()?);
+            }
+            arg => {
+                return Err(syn::Error::new_spanned(
+                    arg,
+                    r#"expected `fixtures("<filename>", ...)` or `migrations = "<path>" | false` or `migrator = "<rust path>"`"#,
+                ));
+            }
+        };
     }
 
     Ok(Args {

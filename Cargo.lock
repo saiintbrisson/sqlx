@@ -3223,7 +3223,7 @@ dependencies = [
  "quote",
  "sqlx-core",
  "sqlx-macros-core",
- "syn 1.0.107",
+ "syn 2.0.22",
 ]
 
 [[package]]
@@ -3245,7 +3245,7 @@ dependencies = [
  "sqlx-mysql",
  "sqlx-postgres",
  "sqlx-sqlite",
- "syn 1.0.107",
+ "syn 2.0.22",
  "tempfile",
  "tokio",
  "url",

@@ -51,7 +51,6 @@ pub fn derive_type(tokenstream: TokenStream) -> TokenStream {
 #[proc_macro_derive(FromRow, attributes(sqlx))]
 pub fn derive_from_row(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
-
     match derives::expand_derive_from_row(&input) {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
@@ -79,10 +78,9 @@ pub fn migrate(input: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn test(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = syn::parse_macro_input!(args as syn::AttributeArgs);
     let input = syn::parse_macro_input!(input as syn::ItemFn);
 
-    match test_attr::expand(args, input) {
+    match test_attr::expand(args.into(), input) {
         Ok(ts) => ts.into(),
         Err(e) => {
             if let Some(parse_err) = e.downcast_ref::<syn::Error>() {
